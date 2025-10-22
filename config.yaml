@@ -8,8 +8,8 @@ api:
 
 # Existing EMA strategy block (unchanged)
 strategy:
-  symbol: 'XPLUSDT'
-  category: 'linear'
+  symbol: 'ZBTUSDT'
+  category: 'spot'
   timeframe: '5'
   ema_fast_period: 9
   ema_slow_period: 21
@@ -35,70 +35,31 @@ strategy:
   hard_stop_loss_pct: 2.5
   entry_cooldown_seconds: 10
 
-# New Spot Rebalancer Configuration
+# Spot Rebalancer Configuration
 rebalancer:
-  timeframe: '1'            # Candle interval used for EMAs
-
-  # Target net delta in base units (spot_base - futures_base)
-  desired_net_delta_base: 0.0
-
-  # Thresholds; units: "base" or "percent" of spot notional
-  thresholds:
-    units: 'percent'
-    soft: 0.0025           # 25 bps
-    hard: 0.0075           # 75 bps
-  partial_rebalance_ratio: 0.5
-
-  # Bias blending
-  bias:
-    mode: 'ema'            # 'ema' | 'manual' | 'off'
-    strength: 0.6
-    w_ema: 0.5
-    w_anchor: 0.5
-    manual_override: 0.0   # used if mode=manual (-1..+1)
-
-  # EMA inputs for bias
-  ema:
-    fast_period: 20
-    slow_period: 50
-    slope_lookback_s: 60
-    trend_threshold_pct: 0.10
-
-  # Recent fills anchor (VWAPs of last N minutes)
-  anchor:
-    window_s: 600
-    edge_bps_soft: 10
-    edge_bps_hard: 2
-    max_wait_s_on_soft: 30
-    degrade_edge_with_time: true
-
-  # Execution (spot only)
-  execution:
-    profile: 'maker_on_soft_taker_on_hard'
-    maker:
-      post_only: true
-      quote_improve_bps: 0
-      chase_seconds: 5
-      max_requotes: 3
-    taker:
-      allowed_on_soft: false
-      allowed_on_hard: true
-    min_trade_base: 0.000001
-    max_trade_base: 1000000
-
-  # Risk & ops
-  risk:
-    max_minute_notional_quote: 50000
-    max_daily_notional_quote: 2000000
-    max_slippage_bps_market: 5
-    cooldown_s_after_market: 10
-    hysteresis_fraction: 0.7
-    kill_switch_drawdown_quote: 5000
+  # Target delta (total exposure in USDT)
+  target_delta_usdt: 1000
+  
+  # Rebalance when divergence exceeds this amount
+  rebalance_threshold_usdt: 250
+  
+  # Trend awareness (adjusts threshold based on trend)
+  use_trend: true
+  ema_fast_period: 9
+  ema_slow_period: 21
+  trend_threshold_pct: 0.1
+  trend_multiplier: 1.5      # Be 1.5x more tolerant when trend supports position
+  timeframe: '5'             # Candle interval for EMAs (minutes)
+  
+  # Order execution
+  use_limit_orders: true     # Try limit orders first, then market if needed
+  max_wait_seconds: 30       # Max time to wait for limit order before using market
+  cooldown_seconds: 10       # Wait time between rebalance attempts
 
 # Delta Management (legacy EMA runner)
 delta_management:
-  desired_delta_usdt: 0
-  divergence_threshold_usdt: 10000
+  desired_delta_usdt: 1000
+  divergence_threshold_usdt: 500
   divergence_timeout_seconds: 360
 
 # Runtime Settings (shared)

@@ -219,17 +219,21 @@ class SimplifiedEMAStrategy:
                     price_filter = info.get('priceFilter', {})
                     self.price_step = float(price_filter.get('tickSize', '0.0001'))
                     
-                    print(f"📏 Instrument specs: qtyStep={self.qty_step}, minOrderQty={self.min_order_qty}, priceStep={self.price_step}")
+                    print(f"📏 Instrument specs for {self.symbol}: qtyStep={self.qty_step}, minOrderQty={self.min_order_qty}, priceStep={self.price_step}")
                     
         except Exception as e:
-            print(f"⚠️ Could not get instrument info: {e}")
-            # Use safe defaults for SOMIUSDT based on typical Bybit specs
+            print(f"⚠️ Could not get instrument info for {self.symbol}: {e}")
+            # Use conservative defaults - most spot pairs require 3 decimal places or less
             self.qty_step = 0.001
             self.min_order_qty = 1.0
             self.price_step = 0.0001
+            print(f"📏 Using default specs: qtyStep={self.qty_step}, minOrderQty={self.min_order_qty}, priceStep={self.price_step}")
             
     def format_quantity(self, qty: float) -> float:
         """Format quantity according to instrument specifications"""
+        if qty <= 0:
+            return 0.0
+            
         # Round to the correct step size
         steps = round(qty / self.qty_step)
         formatted_qty = steps * self.qty_step
@@ -238,9 +242,26 @@ class SimplifiedEMAStrategy:
         if formatted_qty < self.min_order_qty:
             formatted_qty = self.min_order_qty
             
-        # Round to avoid floating point precision issues
-        decimal_places = len(str(self.qty_step).split('.')[-1])
-        return round(formatted_qty, decimal_places)
+        # Calculate decimal places from qty_step to avoid precision issues
+        if self.qty_step >= 1:
+            decimal_places = 0
+        else:
+            # Count decimal places in qty_step string to avoid floating point issues
+            qty_step_str = f"{self.qty_step:.10f}".rstrip('0').rstrip('.')
+            if '.' in qty_step_str:
+                decimal_places = len(qty_step_str.split('.')[1])
+            else:
+                decimal_places = 0
+        
+        # Round to the calculated decimal places
+        formatted_qty = round(formatted_qty, decimal_places)
+        
+        # Additional safety: ensure we don't exceed reasonable precision for spot trading
+        # Most spot pairs don't allow more than 3 decimal places
+        if decimal_places > 3:
+            formatted_qty = round(formatted_qty, 3)
+            
+        return formatted_qty
         
     def format_price(self, price: float) -> float:
         """Format price according to instrument specifications"""
@@ -338,31 +359,47 @@ class SimplifiedEMAStrategy:
     def sync_position(self):
         """Sync position with exchange - SINGLE SOURCE OF TRUTH"""
         try:
-            response = self.client.get_positions(
-                category=self.category,
-                symbol=self.symbol
-            )
-            
-            if response and response.get('retCode') == 0:
-                positions = response['result']['list']
-                if positions:
-                    pos = positions[0]
-                    size = float(pos.get('size', 0))
-                    side = pos.get('side', 'None')
-                    
-                    # Update position
-                    old_position = self.position
-                    self.position = size if side == 'Buy' else -size if side == 'Sell' else 0
-                    
-                    # Handle empty avgPrice strings
-                    avg_price_str = pos.get('avgPrice', '0')
-                    if avg_price_str == '' or avg_price_str is None:
-                        self.avg_entry_price = 0.0
-                    else:
-                        try:
-                            self.avg_entry_price = float(avg_price_str)
-                        except (ValueError, TypeError):
+            if self.category == 'spot':
+                # For spot trading, get coin balance instead of positions
+                base_symbol = self.symbol.replace('USDT', '')
+                spot_value = self.client.get_spot_position_value(base_symbol, "USDT")
+                
+                # Convert USDT value to base quantity using current price
+                current_price = self.get_current_price()
+                if current_price and current_price > 0:
+                    base_quantity = spot_value / current_price
+                    self.position = base_quantity
+                    self.avg_entry_price = current_price  # Approximate for spot
+                else:
+                    self.position = 0.0
+                    self.avg_entry_price = 0.0
+            else:
+                # For futures trading, use positions API
+                response = self.client.get_positions(
+                    category=self.category,
+                    symbol=self.symbol
+                )
+                
+                if response and response.get('retCode') == 0:
+                    positions = response['result']['list']
+                    if positions:
+                        pos = positions[0]
+                        size = float(pos.get('size', 0))
+                        side = pos.get('side', 'None')
+                        
+                        # Update position
+                        old_position = self.position
+                        self.position = size if side == 'Buy' else -size if side == 'Sell' else 0
+                        
+                        # Handle empty avgPrice strings
+                        avg_price_str = pos.get('avgPrice', '0')
+                        if avg_price_str == '' or avg_price_str is None:
                             self.avg_entry_price = 0.0
+                        else:
+                            try:
+                                self.avg_entry_price = float(avg_price_str)
+                            except (ValueError, TypeError):
+                                self.avg_entry_price = 0.0
                     
                     if old_position != self.position:
                         print(f"📊 Position synced: {old_position:.3f} → {self.position:.3f}")
@@ -1175,6 +1212,9 @@ class SimplifiedEMAStrategy:
         
         # Format price properly
         formatted_price = self.format_price(adjusted_price)
+        
+        # Debug output for order parameters
+        print(f"🔍 Order params: qty={qty} (raw: {allocation_usdt / adjusted_price:.6f}), price={formatted_price}, qty_step={self.qty_step}")
         
         # Place order
         response = self.client.place_order(
