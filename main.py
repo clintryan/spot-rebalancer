@@ -48,6 +48,10 @@ class SpotRebalancer:
         self.trend_threshold_pct = float(r.get("trend_threshold_pct", 0.1))
         self.trend_multiplier = float(r.get("trend_multiplier", 1.5))  # How much more tolerant in favorable trend
         
+        # EMA-based opportunistic rebalancing config
+        self.ema_rebalance_config = r.get("ema_rebalance", {})
+        self.last_ema_rebalance_time = 0
+        
         # EMA state
         self.ema_fast = None
         self.ema_slow = None
@@ -167,6 +171,108 @@ class SpotRebalancer:
         else:
             # Divergence opposes trend - use standard threshold
             return self.rebalance_threshold_usdt
+
+    def check_ema_rebalance_opportunity(self, current_price: float, position_usdt: float, current_time: float) -> dict:
+        """
+        Check if EMA-based opportunistic rebalancing should trigger.
+        
+        Logic:
+        - If long in uptrend: rebalance when price breaks X% above fast EMA (take profits defensively)
+        - If long in downtrend: rebalance when price comes back to fast EMA (defensive exit opportunity)
+        """
+        config = self.ema_rebalance_config
+        
+        # Check if feature is enabled
+        if not config.get('enabled', False):
+            return {"should_rebalance": False, "reason": "", "suggested_ratio": 0.0}
+        
+        # Check if EMAs are initialized
+        if self.ema_fast is None or not self.use_trend:
+            return {"should_rebalance": False, "reason": "EMAs not initialized", "suggested_ratio": 0.0}
+        
+        # Only trigger if we have a meaningful position
+        min_position_usdt = float(config.get('min_position_usdt', 100.0))
+        if abs(position_usdt) < min_position_usdt:
+            return {"should_rebalance": False, "reason": "Position too small", "suggested_ratio": 0.0}
+        
+        # Cooldown check (prevent too frequent EMA-based rebalances)
+        min_cooldown = float(config.get('cooldown_seconds', 60.0))
+        if current_time - self.last_ema_rebalance_time < min_cooldown:
+            return {"should_rebalance": False, "reason": "Cooldown active", "suggested_ratio": 0.0}
+        
+        is_long = position_usdt > 0
+        price_vs_ema_pct = ((current_price - self.ema_fast) / self.ema_fast) * 100.0 if self.ema_fast > 0 else 0.0
+        
+        uptrend_breakout_pct = float(config.get('uptrend_breakout_pct', 1.0))
+        downtrend_ema_touch_pct = float(config.get('downtrend_ema_touch_pct', 0.2))
+        ema_partial_ratio = float(config.get('ema_partial_ratio', 0.3))
+        
+        # Case 1: Long position in uptrend - rebalance when price breaks X% above fast EMA
+        if is_long and self.trend == "UPTREND":
+            if price_vs_ema_pct >= uptrend_breakout_pct:
+                return {
+                    "should_rebalance": True,
+                    "reason": f"Long in uptrend: price {price_vs_ema_pct:.2f}% above EMA{self.ema_fast_period} (defensive profit-taking)",
+                    "suggested_ratio": ema_partial_ratio
+                }
+        
+        # Case 2: Long position in downtrend - rebalance when price comes back to fast EMA
+        elif is_long and self.trend == "DOWNTREND":
+            # In downtrend, we want to exit when price rallies back near the EMA
+            # Check if price is within X% of the EMA (either side)
+            if abs(price_vs_ema_pct) <= downtrend_ema_touch_pct:
+                return {
+                    "should_rebalance": True,
+                    "reason": f"Long in downtrend: price near EMA{self.ema_fast_period} ({price_vs_ema_pct:.2f}% - defensive exit)",
+                    "suggested_ratio": ema_partial_ratio
+                }
+        
+        return {"should_rebalance": False, "reason": "No EMA trigger", "suggested_ratio": 0.0}
+
+    def execute_ema_rebalance(self, side: str, qty_usdt: float, price: float, reason: str):
+        """Execute an EMA-triggered rebalance"""
+        try:
+            # Calculate quantity in base units
+            qty_base = qty_usdt / price
+            
+            # Check balance before placing orders
+            if side == "Sell":
+                available_balance = self.get_available_balance()
+                if available_balance <= 0:
+                    print(f"⚠️ No {self.base_symbol} balance available for EMA rebalance")
+                    return
+                if qty_base > available_balance:
+                    print(f"⚠️ Reducing EMA rebalance quantity: {qty_base:.3f} → {available_balance:.3f} {self.base_symbol}")
+                    qty_base = available_balance
+            else:
+                usdt_balance = self.get_usdt_balance()
+                qty_usdt = min(qty_usdt, usdt_balance)
+                qty_base = qty_usdt / price
+            
+            print(f"\n🎯 EXECUTING EMA REBALANCE")
+            print(f"   Side: {side}")
+            print(f"   Quantity: {qty_base:.3f} {self.base_symbol} (${qty_usdt:.0f})")
+            print(f"   Price: ${price:.4f}")
+            print(f"   Reason: {reason}")
+            
+            # Execute market order for immediate execution
+            response = self.client.place_market_order(
+                category='spot',
+                symbol=self.symbol,
+                side=side,
+                qty=qty_base,
+                verbose=True
+            )
+            
+            if response and response.get('retCode') == 0:
+                print(f"✅ EMA rebalance order executed successfully")
+                self.last_ema_rebalance_time = time.time()
+                self.last_rebalance_time = time.time()  # Update general rebalance time too
+            else:
+                print(f"❌ EMA rebalance order failed: {response.get('retMsg', 'Unknown error')}")
+                
+        except Exception as e:
+            print(f"❌ Error executing EMA rebalance: {e}")
 
     def get_spot_position_usdt(self, price: float) -> float:
         """Get spot position value in USDT"""
@@ -289,6 +395,26 @@ class SpotRebalancer:
         if now - self.last_status_time >= self.status_interval:
             self.print_status(price, spot_usdt, futures_usdt, total_delta, divergence, adjusted_threshold)
             self.last_status_time = now
+        
+        # Check EMA-based opportunistic rebalancing BEFORE normal threshold check
+        # This allows defensive rebalancing even when within normal thresholds
+        if hasattr(self, 'ema_rebalance_config') and self.ema_rebalance_config.get('enabled', False):
+            ema_check = self.check_ema_rebalance_opportunity(price, spot_usdt, now)
+            if ema_check['should_rebalance']:
+                print(f"\n🎯 EMA OPPORTUNISTIC REBALANCE TRIGGERED")
+                print(f"   Reason: {ema_check['reason']}")
+                print(f"   Suggested reduction: {ema_check['suggested_ratio']*100:.0f}% of position")
+                
+                # Calculate rebalance quantity based on suggested ratio
+                # We want to reduce our exposure, so if long, sell; if short, buy
+                if spot_usdt > 0:  # Long exposure
+                    rebalance_qty_usdt = spot_usdt * ema_check['suggested_ratio']
+                    self.execute_ema_rebalance("Sell", rebalance_qty_usdt, price, ema_check['reason'])
+                    return
+                elif spot_usdt < 0:  # Short exposure (shouldn't happen with spot, but for completeness)
+                    rebalance_qty_usdt = abs(spot_usdt) * ema_check['suggested_ratio']
+                    self.execute_ema_rebalance("Buy", rebalance_qty_usdt, price, ema_check['reason'])
+                    return
         
         # Check if we need to rebalance (using adjusted threshold)
         if abs(divergence) < adjusted_threshold:

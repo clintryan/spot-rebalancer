@@ -51,6 +51,20 @@ rebalancer:
   trend_multiplier: 1.5      # Be 1.5x more tolerant when trend supports position
   timeframe: '5'             # Candle interval for EMAs (minutes)
   
+  # EMA-based opportunistic rebalancing (defensive strategy)
+  ema_rebalance:
+    enabled: true
+    # Long in uptrend: take profits when price breaks X% above fast EMA
+    uptrend_breakout_pct: 1.0           # 1% above EMA9 triggers defensive profit-taking
+    # Long in downtrend: exit when price rallies back to fast EMA
+    downtrend_ema_touch_pct: 0.2        # Within 0.2% of EMA9 triggers defensive exit
+    # Minimum position size to trigger EMA-based rebalancing
+    min_position_usdt: 100.0            # Only rebalance if position >= $100
+    # Portion of position to reduce when EMA trigger hits
+    ema_partial_ratio: 0.3              # Reduce 30% of position
+    # Cooldown between EMA-triggered rebalances
+    cooldown_seconds: 60                # Minimum 60 seconds between EMA rebalances
+  
   # Order execution
   use_limit_orders: true     # Try limit orders first, then market if needed
   max_wait_seconds: 30       # Max time to wait for limit order before using market
