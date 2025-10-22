@@ -175,14 +175,20 @@ class SimpleRunner:
         # Load environment variables
         load_dotenv()
         
-        # Get API credentials from environment variables using the names from YAML config
-        api_key = os.getenv(config['api']['api_key'].replace('${', '').replace('}', ''))
-        api_secret = os.getenv(config['api']['api_secret'].replace('${', '').replace('}', ''))
+        # Get API credentials from environment variables using account name
+        account_name = config['api']['account_name']
+        api_key_env = f"BYBIT_API_KEY_{account_name}"
+        api_secret_env = f"BYBIT_API_SECRET_{account_name}"
+        
+        api_key = os.getenv(api_key_env)
+        api_secret = os.getenv(api_secret_env)
         
         if not api_key or not api_secret:
             print(f"❌ Error: API credentials not found in environment variables")
-            print(f"Expected: {config['api']['api_key']} and {config['api']['api_secret']}")
+            print(f"Expected: {api_key_env} and {api_secret_env}")
+            print(f"For account: {account_name}")
             print("Please set these environment variables or create a .env file")
+            print("Format: BYBIT_API_KEY_{ACCOUNT_NAME} and BYBIT_API_SECRET_{ACCOUNT_NAME}")
             return
         
         client = BybitClient(

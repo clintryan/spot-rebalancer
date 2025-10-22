@@ -3,8 +3,9 @@
 
 # API Configuration
 api:
-  api_key: '${BYBIT_API_KEY_BybitWood_Main}'
-  api_secret: '${BYBIT_API_SECRET_BybitWood_Main}'
+  # Account name - this will be used to construct environment variable names
+  # For example: "Wood" -> BYBIT_API_KEY_Wood, BYBIT_API_SECRET_Wood
+  account_name: 'Wood'  # Options: 'Wood', 'Hyma', or any other account name
   testnet: false  # Set to false for live trading
   
 strategy:
