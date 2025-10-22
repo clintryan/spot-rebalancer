@@ -1,67 +1,109 @@
-# config_simple.yaml
-# Simplified EMA Strategy Configuration
+# config.yaml
+# Existing simplified EMA strategy config retained for compatibility.
 
 # API Configuration
 api:
-  # Account name - this will be used to construct environment variable names
-  # For example: "Wood" -> BYBIT_API_KEY_Wood, BYBIT_API_SECRET_Wood
-  account_name: 'Wood'  # Options: 'Wood', 'Hyma', or any other account name
-  testnet: false  # Set to false for live trading
-  
+  account_name: 'Wood'
+  testnet: false
+
+# Existing EMA strategy block (unchanged)
 strategy:
-  # Trading pair
   symbol: 'XPLUSDT'
-  category: 'linear'  # 'linear' for perpetuals, 'spot' for spot
-  
-  # Timeframe (candle interval for EMA calculations)
-  timeframe: '5'  # 1, 3, 5, 15, 30, 60, 120, 240, 360, 720, D, W, M
-  
-  # EMA Setti=gs
+  category: 'linear'
+  timeframe: '5'
   ema_fast_period: 9
   ema_slow_period: 21
-  trend_threshold_pct: 0.10          # Threshold for trend detection (0.1 = 0.1%)
-  
-  # Order Offset Settings
-  entry_offset_pct: -0.1             # Offset for entry orders (0.5 = 0.5%)
-  order_update_threshold_pct: 0.25   # Only update orders when price drifts this far from EMA (0.5 = 0.5%)
-  
-  # Position Sizing (in USDT)
-  max_allocation_usdt: 5000        # Maximum total position (increased to handle current overrun)
+  trend_threshold_pct: 0.10
+  entry_offset_pct: -0.1
+  order_update_threshold_pct: 0.25
+  max_allocation_usdt: 5000
   ema_allocations:
-    ema9_pct: 25                   # 50% of max allocation for EMA9 entries
-    ema21_pct: 75                  # 50% of max allocation for EMA21 entries
-  
-  # Risk Management - Multiple Take Profit Levels
+    ema9_pct: 25
+    ema21_pct: 75
   take_profit_levels:
     tp1:
-      pct: 0.5                    # First TP at 0.5%
-      exit_pct: 10                # Exit 20% of position
+      pct: 0.5
+      exit_pct: 10
     tp2:
-      pct: 1.0                    # Second TP at 1.0%
-      exit_pct: 5                # Exit 10% of remaining position
+      pct: 1.0
+      exit_pct: 5
     tp3:
-      pct: 2.5                    # Third TP at 2.5%
-      exit_pct: 10                # Exit 20% of remaining position (leave 50%)
-  
-  # Take Profit Execution Method
-  tp_execution_method: "limit"    # "limit" for limit orders (visible on exchange), "market" for market execution
-  
-  # Stop Loss - Two-tier system
-  stop_loss_pct: 0.5             # Conditional stop loss at 0.25% below/above slow EMA (EMA21) - only on candle close
-  hard_stop_loss_pct: 2.5         # Hard stop loss at 1% below/above slow EMA (EMA21) - immediate trigger
-  
-  # Timing
-  entry_cooldown_seconds: 10      # Wait 10 seconds between entries
+      pct: 2.5
+      exit_pct: 10
+  tp_execution_method: "limit"
+  stop_loss_pct: 0.5
+  hard_stop_loss_pct: 2.5
+  entry_cooldown_seconds: 10
 
-# Delta Management Settings
+# New Spot Rebalancer Configuration
+rebalancer:
+  timeframe: '1'            # Candle interval used for EMAs
+
+  # Target net delta in base units (spot_base - futures_base)
+  desired_net_delta_base: 0.0
+
+  # Thresholds; units: "base" or "percent" of spot notional
+  thresholds:
+    units: 'percent'
+    soft: 0.0025           # 25 bps
+    hard: 0.0075           # 75 bps
+  partial_rebalance_ratio: 0.5
+
+  # Bias blending
+  bias:
+    mode: 'ema'            # 'ema' | 'manual' | 'off'
+    strength: 0.6
+    w_ema: 0.5
+    w_anchor: 0.5
+    manual_override: 0.0   # used if mode=manual (-1..+1)
+
+  # EMA inputs for bias
+  ema:
+    fast_period: 20
+    slow_period: 50
+    slope_lookback_s: 60
+    trend_threshold_pct: 0.10
+
+  # Recent fills anchor (VWAPs of last N minutes)
+  anchor:
+    window_s: 600
+    edge_bps_soft: 10
+    edge_bps_hard: 2
+    max_wait_s_on_soft: 30
+    degrade_edge_with_time: true
+
+  # Execution (spot only)
+  execution:
+    profile: 'maker_on_soft_taker_on_hard'
+    maker:
+      post_only: true
+      quote_improve_bps: 0
+      chase_seconds: 5
+      max_requotes: 3
+    taker:
+      allowed_on_soft: false
+      allowed_on_hard: true
+    min_trade_base: 0.000001
+    max_trade_base: 1000000
+
+  # Risk & ops
+  risk:
+    max_minute_notional_quote: 50000
+    max_daily_notional_quote: 2000000
+    max_slippage_bps_market: 5
+    cooldown_s_after_market: 10
+    hysteresis_fraction: 0.7
+    kill_switch_drawdown_quote: 5000
+
+# Delta Management (legacy EMA runner)
 delta_management:
-  desired_delta_usdt: 0           # Target delta position (0 = neutral, +ve = long bias, -ve = short bias)
-  divergence_threshold_usdt: 10000 # Allow this much divergence from desired delta before rebalancing
-  divergence_timeout_seconds: 360 # Allow divergence for this many seconds before forcing rebalance
-  
-# Runtime Settings
+  desired_delta_usdt: 0
+  divergence_threshold_usdt: 10000
+  divergence_timeout_seconds: 360
+
+# Runtime Settings (shared)
 runtime:
-  duration_seconds: 86400         # Run for 24 hours (or null for infinite)
-  status_interval: 60             # Print status every 30 seconds
-  exit_on_shutdown: false          # Set to false to hold positions when killed
-  pause_mode: false               # Set to true to start in pause mode (no new trades)
+  duration_seconds: 86400
+  status_interval: 60
+  exit_on_shutdown: false
+  pause_mode: false
